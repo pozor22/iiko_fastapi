@@ -1,0 +1,8 @@
+services:
+  db_backend:
+    container_name: db_backend
+    image: postgres:17.4-alpine3.21
+    env_file:
+      - .env
+    ports:
+      - "5433:5432"
