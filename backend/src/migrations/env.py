@@ -11,7 +11,7 @@ sys.path.insert(0, dirname(dirname(dirname(abspath(__file__)))))
 from settings.database import DATABASE_URL
 from settings.base_model import Base
 from test.models import Product
-from core.models import User
+from core.models import User, PasswordCode
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

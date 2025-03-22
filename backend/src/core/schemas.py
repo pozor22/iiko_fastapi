@@ -39,25 +39,11 @@ class GetUserSchemas(BaseModel):
         from_attribute = True
 
 
-class ResponseLoginUserSchema(BaseModel):
-    access: str
-    user: GetUserSchemas
-
-    class Config:
-        from_attribute = True
-
-
-class LoginUserSchema(BaseModel):
-    username: str
-    password: str
-
-    class Config:
-        from_attribute = True
-
-
 class ChangeUsernameOrEmailSchema(BaseModel):
     username: Optional[str] = None
     email: Optional[EmailStr] = None
 
-    class Config:
-        from_attribute = True
+
+class ChangePasswordSchema(BaseModel):
+    password: str
+    new_password: str

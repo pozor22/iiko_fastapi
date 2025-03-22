@@ -10,6 +10,9 @@ DB_NAME = os.environ.get("DB_NAME")
 DB_USER = os.environ.get("DB_USER")
 DB_PASS = os.environ.get("DB_PASS")
 
+# Redis
+REDIS_URL = os.environ.get("REDIS_URL")
+
 # Email
 EMAIL_USER = os.environ.get("EMAIL_HOST_USER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")

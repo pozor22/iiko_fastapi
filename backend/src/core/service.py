@@ -1,6 +1,7 @@
 import jwt
 import asyncio
 import base64
+import random
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
@@ -10,10 +11,10 @@ from pydantic import EmailStr
 
 from settings import config as _config
 
-from .tasks import send_email_active_account
+from .tasks import send_email_active_account, send_email_change_password
 from .schemas import CreateUserSchemas, Token
 from .dependencies import pwd_context, get_user_by_username
-from .models import User
+from .models import User, PasswordCode
 
 
 def get_password_hash(password):
@@ -145,3 +146,67 @@ async def change_username_email(
         await db.commit()
         await db.refresh(user)
         return user
+
+
+async def get_password_code(
+        user: User,
+        repeat: bool,
+        db: AsyncSession):
+    query = select(PasswordCode).where(PasswordCode.user_id == user.id)
+    result = await db.execute(query)
+    code = result.scalars().first()
+
+    if not code:
+        code = PasswordCode(
+            user_id=user.id,
+            code=random.randint(100000, 999999))
+        db.add(code)
+        await db.commit()
+        await db.refresh(code)
+    elif repeat:
+        code.code = random.randint(100000, 999999)
+        await db.commit()
+        await db.refresh(code)
+
+    return code
+
+
+async def change_password(
+        password: str,
+        new_password: str,
+        user: User,
+        db: AsyncSession,
+        redis: AsyncSession
+):
+    if not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Invalid password")
+    if password == new_password:
+        raise HTTPException(status_code=400, detail="New password cannot be the same as the old password")
+    hashed_password = get_password_hash(new_password)
+    code = await get_password_code(user, True, db)
+
+    asyncio.create_task(send_email_change_password(code.code, user.email, user.username))
+
+    await redis.setex(f"password:{user.id}", timedelta(minutes=10), hashed_password)
+
+    return {"message": "Code sent to email"}
+
+
+async def verify_change_password(
+        code: int,
+        user: User,
+        db: AsyncSession,
+        redis: AsyncSession
+):
+    code_user = await get_password_code(user, False, db)
+    if code_user.code == code:
+        password = await redis.get(f"password:{user.id}")
+        if not password:
+            raise HTTPException(status_code=400, detail="Invalid code")
+        user.hashed_password = password
+        await db.delete(code_user)
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    raise HTTPException(status_code=400, detail="Invalid code")
