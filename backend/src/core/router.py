@@ -1,78 +1,67 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Form
+import asyncio
+from fastapi import APIRouter, Depends, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
 from typing import List, Annotated
-from datetime import timedelta
 
 from settings.database import get_async_session
-from settings.config import ACCESS_TOKEN_EXPIRE_MINUTES
 
-from .service import authenticate_user, create_access_token, get_password_hash
-from .schemas import (CreateUserSchemas, GetUserSchemas,
-                      Token)
+from . import service as service_core
 from .models import User
-from .dependencies import oauth2_scheme
+from .tasks import send_email_active_account
+from .dependencies import get_current_user
+from .schemas import (CreateUserSchemas, GetUserSchemas,
+                      Token, ChangeUsernameOrEmailSchema)
 
 router = APIRouter(
     tags=['core'],
     prefix='/core'
 )
 
-@router.get('/', response_model=List[GetUserSchemas], dependencies=[Depends(oauth2_scheme)])
-async def get_user(db: AsyncSession = Depends(get_async_session)):
-    query = select(User)
-    result = await db.execute(query)
-    users = result.scalars().all()
-    return users
+@router.get('/', response_model=List[GetUserSchemas], dependencies=[Depends(get_current_user)])
+async def get_user_route(db: AsyncSession = Depends(get_async_session)):
+    return await service_core.get_users(db)
+
+
+@router.get('/{user_id}', response_model=GetUserSchemas)
+async def get_user_by_id_route(
+        user_id: int,
+        db: AsyncSession = Depends(get_async_session)):
+    return await service_core.get_user_by_id(db, user_id)
 
 
 @router.post('/', response_model=GetUserSchemas)
-async def create_user(
+async def create_user_route(
         user: Annotated[CreateUserSchemas, Form()],
         db: AsyncSession = Depends(get_async_session)
 ):
-    hashed_password = get_password_hash(user.password)
+    user = await service_core.create_user(db, user)
+    asyncio.create_task(send_email_active_account(user.id, user.email, user.username))
+    return user
 
-    new_user = User(
-        username=user.username,
-        email=user.email,
-        hashed_password=hashed_password
-    )
 
-    db.add(new_user)
-    try:
-        await db.commit()
-        await db.refresh(new_user)
-        return new_user
-    except IntegrityError as e:
-        await db.rollback()
-        if "username" in str(e.orig):
-            raise HTTPException(status_code=400, detail="Username already exists")
-        elif "email" in str(e.orig):
-            raise HTTPException(status_code=400, detail="Email already exists")
-        else:
-            raise HTTPException(status_code=400, detail="Unique constraint failed")
+@router.get('/{uid}/{token}')
+async def verify_email_route(
+        uid: str,
+        token: str,
+        db: AsyncSession = Depends(get_async_session)
+):
+    return service_core.verify_email(uid, db)
 
 
 @router.post("/login")
-async def login_for_access_token(
+async def login_for_access_token_route(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: AsyncSession = Depends(get_async_session),
 ) -> Token:
-    user = await authenticate_user(
-        db=db, username=form_data.username, password=form_data.password
-    )
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token_expires = timedelta(minutes=int(ACCESS_TOKEN_EXPIRE_MINUTES))
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return Token(access_token=access_token, token_type="bearer")
+    return await service_core.login_for_access_token(form_data, db)
+
+
+@router.patch('/', response_model=GetUserSchemas, dependencies=[Depends(get_current_user)])
+async def pass_or_email_update_route(
+        data: Annotated[ChangeUsernameOrEmailSchema, Form()],
+        db: AsyncSession = Depends(get_async_session),
+        user: User = Depends(get_current_user)
+):
+    return await service_core.change_username_email(data.username, data.email, user, db)
 
